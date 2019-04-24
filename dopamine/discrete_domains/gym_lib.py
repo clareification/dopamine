@@ -29,7 +29,7 @@ import itertools
 import math
 
 
-
+import gym_gridworlds
 import gym
 import numpy as np
 import tensorflow as tf
@@ -47,6 +47,8 @@ gin.constant('gym_lib.CARTPOLE_STACK_SIZE', 1)
 gin.constant('gym_lib.ACROBOT_OBSERVATION_SHAPE', (6, 1))
 gin.constant('gym_lib.ACROBOT_OBSERVATION_DTYPE', tf.float32)
 gin.constant('gym_lib.ACROBOT_STACK_SIZE', 1)
+gin.constant('gym_lib.GRID_OBSERVATION_SHAPE', (2, 1))
+gin.constant('gym_lib.GRID_OBSERVATION_DTYPE', tf.uint8)
 
 slim = tf.contrib.slim
 
@@ -65,13 +67,34 @@ def create_gym_environment(environment_name=None, version='v0'):
   assert environment_name is not None
   full_game_name = '{}-{}'.format(environment_name, version)
   env = gym.make(full_game_name)
-  # Strip out the TimeLimit wrapper from Gym, which caps us at 200 steps.
-  env = env.env
+  # Strip out the TimeLimit wrapper from Gym, which caps us at 200 steps. (Unless gridworld)
+  if 'world' not in environment_name:
+    env = env.env
   # Wrap the returned environment in a class which conforms to the API expected
   # by Dopamine.
   env = GymPreprocessing(env)
   return env
 
+@gin.configurable
+def _tiny_network(
+  min_vals, max_vals, num_actions, state,
+      num_atoms=None, bottleneck=10):
+  print("Bottleneck for tiny network: ", bottleneck)
+  net = tf.cast(state, tf.float32)
+  net = slim.flatten(net)
+  net -= min_vals
+  net /= max_vals - min_vals
+  net = 2.0 * net - 1.0  # Rescale in range [-1, 1].
+  net = slim.fully_connected(net, 256)
+  net = slim.fully_connected(net, 256)
+  net = slim.fully_connected(net, bottleneck)
+  if num_atoms is None:
+    # We are constructing a DQN-style network.
+    return slim.fully_connected(net, num_actions, activation_fn=None), net
+  else:
+    # We are constructing a rainbow-style network.
+    return slim.fully_connected(net, num_actions * num_atoms,
+                                activation_fn=None), net 
 
 @gin.configurable
 def _basic_discrete_domain_network(min_vals, max_vals, num_actions, state,
@@ -94,16 +117,15 @@ def _basic_discrete_domain_network(min_vals, max_vals, num_actions, state,
   net -= min_vals
   net /= max_vals - min_vals
   net = 2.0 * net - 1.0  # Rescale in range [-1, 1].
-  net = slim.fully_connected(net, 512)
-  net = slim.fully_connected(net, 512)
+  net = slim.fully_connected(net, 256)
+  net = slim.fully_connected(net, 256)
   if num_atoms is None:
     # We are constructing a DQN-style network.
-    return slim.fully_connected(net, num_actions, activation_fn=None)
+    return slim.fully_connected(net, num_actions, activation_fn=None), net
   else:
     # We are constructing a rainbow-style network.
     return slim.fully_connected(net, num_actions * num_atoms,
-                                activation_fn=None)
-
+                                activation_fn=None), net
 
 @gin.configurable
 def cartpole_dqn_network(num_actions, network_type, state):
@@ -119,9 +141,15 @@ def cartpole_dqn_network(num_actions, network_type, state):
   Returns:
     net: _network_type object containing the tensors output by the network.
   """
-  q_values = _basic_discrete_domain_network(
+  q_values, features = _basic_discrete_domain_network(
       CARTPOLE_MIN_VALS, CARTPOLE_MAX_VALS, num_actions, state)
-  return network_type(q_values)
+  return network_type(q_values, features)
+
+@gin.configurable
+def small_cartpole_dqn_network(num_actions, network_type, state, bottleneck=10):
+  q_values, features = _tiny_network(
+      CARTPOLE_MIN_VALS, CARTPOLE_MAX_VALS, num_actions, state)
+  return network_type(q_values, features)
 
 
 class FourierBasis(object):
@@ -231,14 +259,24 @@ def cartpole_rainbow_network(num_actions, num_atoms, support, network_type,
   Returns:
     net: _network_type object containing the tensors output by the network.
   """
-  net = _basic_discrete_domain_network(
+  net, features = _basic_discrete_domain_network(
       CARTPOLE_MIN_VALS, CARTPOLE_MAX_VALS, num_actions, state,
       num_atoms=num_atoms)
   logits = tf.reshape(net, [-1, num_actions, num_atoms])
   probabilities = tf.contrib.layers.softmax(logits)
   q_values = tf.reduce_sum(support * probabilities, axis=2)
-  return network_type(q_values, logits, probabilities)
+  return network_type(q_values, logits, probabilities, features)
 
+@gin.configurable
+def small_cartpole_rainbow_network(num_actions, num_atoms,
+  support, network_type, state, bottleneck=10):
+  net, features = _tiny_network(
+    CARTPOLE_MIN_VALS, CARTPOLE_MAX_VALS, num_actions, state,
+      num_atoms=num_atoms)
+  logits = tf.reshape(net, [-1, num_actions, num_atoms])
+  probabilities = tf.contrib.layers.softmax(logits)
+  q_values = tf.reduce_sum(support * probabilities, axis=2)
+  return network_type(q_values, logits, probabilities, features)
 
 @gin.configurable
 def acrobot_dqn_network(num_actions, network_type, state):

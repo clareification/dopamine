@@ -3,7 +3,7 @@
 import dopamine.agents.dqn.dqn_agent
 import dopamine.agents.rainbow.rainbow_agent
 import dopamine.discrete_domains.gym_lib
-import dopamine.discrete_domains.run_experiment
+import dopamine.discrete_domains.run_feature_experiment
 import dopamine.replay_memory.prioritized_replay_buffer
 import gin.tf.external_configurables
 
@@ -19,6 +19,7 @@ RainbowAgent.min_replay_history = 500
 RainbowAgent.update_period = 4
 RainbowAgent.target_update_period = 10
 RainbowAgent.epsilon_fn = @dqn_agent.identity_epsilon
+RainbowAgent.epsilon_train = 0.1
 RainbowAgent.replay_scheme = 'uniform'
 RainbowAgent.tf_device = '/gpu:0'  # use '/cpu:*' for non-GPU version
 RainbowAgent.optimizer = @tf.train.AdamOptimizer()
@@ -28,12 +29,12 @@ tf.train.AdamOptimizer.epsilon = 0.0003125
 
 create_gym_environment.environment_name = 'CartPole'
 create_gym_environment.version = 'v0'
-create_agent.agent_name = 'rainbow'
-Runner.create_environment_fn = @gym_lib.create_gym_environment
-Runner.num_iterations = 500
-Runner.training_steps = 1000
-Runner.evaluation_steps = 1000
-Runner.max_steps_per_episode = 200  # Default max episode length.
+run_feature_experiment.create_agent.agent_name = 'rainbow'
+FeatureRunner.create_environment_fn = @gym_lib.create_gym_environment
+FeatureRunner.num_iterations = 500
+FeatureRunner.training_steps = 1000
+FeatureRunner.evaluation_steps = 1000
+FeatureRunner.max_steps_per_episode = 200  # Default max episode length.
 
 WrappedPrioritizedReplayBuffer.replay_capacity = 50000
 WrappedPrioritizedReplayBuffer.batch_size = 128

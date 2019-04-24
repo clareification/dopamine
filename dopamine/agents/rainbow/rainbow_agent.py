@@ -79,7 +79,8 @@ class RainbowAgent(dqn_agent.DQNAgent):
                optimizer=tf.train.AdamOptimizer(
                    learning_rate=0.00025, epsilon=0.0003125),
                summary_writer=None,
-               summary_writing_frequency=500):
+               summary_writing_frequency=500,
+               bottleneck=10):
     """Initializes the agent and constructs the components of its graph.
 
     Args:
@@ -127,9 +128,9 @@ class RainbowAgent(dqn_agent.DQNAgent):
     self._num_atoms = num_atoms
     self._support = tf.linspace(-vmax, vmax, num_atoms)
     self._replay_scheme = replay_scheme
+
     # TODO(b/110897128): Make agent optimizer attribute private.
     self.optimizer = optimizer
-
     dqn_agent.DQNAgent.__init__(
         self,
         sess=sess,
@@ -151,7 +152,8 @@ class RainbowAgent(dqn_agent.DQNAgent):
         use_staging=use_staging,
         optimizer=self.optimizer,
         summary_writer=summary_writer,
-        summary_writing_frequency=summary_writing_frequency)
+        summary_writing_frequency=summary_writing_frequency,
+        bottleneck=bottleneck)
 
   def _get_network_type(self):
     """Returns the type of the outputs of a value distribution network.
@@ -160,7 +162,7 @@ class RainbowAgent(dqn_agent.DQNAgent):
       net_type: _network_type object defining the outputs of the network.
     """
     return collections.namedtuple('c51_network',
-                                  ['q_values', 'logits', 'probabilities'])
+                                  ['q_values', 'logits', 'probabilities', 'features'])
 
   def _network_template(self, state):
     """Builds a convolutional network that outputs Q-value distributions.
@@ -194,7 +196,8 @@ class RainbowAgent(dqn_agent.DQNAgent):
         stack_size=self.stack_size,
         use_staging=use_staging,
         update_horizon=self.update_horizon,
-        gamma=self.gamma)
+        gamma=self.gamma,
+        observation_dtype=self.observation_dtype.as_numpy_dtype)
 
   def _build_target_distribution(self):
     """Builds the C51 target distribution as per Bellemare et al. (2017).
@@ -256,7 +259,13 @@ class RainbowAgent(dqn_agent.DQNAgent):
       train_op: An op performing one step of training from replay data.
     """
     target_distribution = tf.stop_gradient(self._build_target_distribution())
-
+    replay_action_one_hot = tf.one_hot(
+        self._replay.actions, self.num_actions, 1., 0., name='action_one_hot')
+    replay_chosen_q = tf.reduce_sum(
+        self._replay_net_outputs.q_values * replay_action_one_hot,
+        reduction_indices=1,
+        name='replay_chosen_q')
+    
     # size of indices: batch_size x 1.
     indices = tf.range(tf.shape(self._replay_net_outputs.logits)[0])[:, None]
     # size of reshaped_actions: batch_size x 2.

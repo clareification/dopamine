@@ -29,6 +29,7 @@ from dopamine.discrete_domains import atari_lib
 from dopamine.replay_memory import circular_replay_buffer
 import numpy as np
 import tensorflow as tf
+from dopamine.discrete_domains import gridworld_lib
 
 import gin.tf
 
@@ -103,7 +104,8 @@ class DQNAgent(object):
                    epsilon=0.00001,
                    centered=True),
                summary_writer=None,
-               summary_writing_frequency=500):
+               summary_writing_frequency=500,
+               bottleneck=10):
     """Initializes the agent and constructs the components of its graph.
 
     Args:
@@ -157,6 +159,7 @@ class DQNAgent(object):
     tf.logging.info('\t tf_device: %s', tf_device)
     tf.logging.info('\t use_staging: %s', use_staging)
     tf.logging.info('\t optimizer: %s', optimizer)
+    tf.logging.info('\t num_actions: %d', num_actions)
 
     self.num_actions = num_actions
     self.observation_shape = tuple(observation_shape)
@@ -178,6 +181,7 @@ class DQNAgent(object):
     self.optimizer = optimizer
     self.summary_writer = summary_writer
     self.summary_writing_frequency = summary_writing_frequency
+    self.bottleneck = bottleneck
 
     with tf.device(tf_device):
       # Create a placeholder for the state input to the DQN network.
@@ -210,7 +214,7 @@ class DQNAgent(object):
     Returns:
       net_type: _network_type object defining the outputs of the network.
     """
-    return collections.namedtuple('DQN_network', ['q_values'])
+    return collections.namedtuple('DQN_network', ['q_values', 'features'])
 
   def _network_template(self, state):
     """Builds the convolutional network used to compute the agent's Q-values.
@@ -222,6 +226,7 @@ class DQNAgent(object):
       net: _network_type object containing the tensors output by the network.
     """
     return self.network(self.num_actions, self._get_network_type(), state)
+
 
   def _build_networks(self):
     """Builds the Q-value network computations needed for acting and training.
@@ -241,6 +246,7 @@ class DQNAgent(object):
     self.online_convnet = tf.make_template('Online', self._network_template)
     self.target_convnet = tf.make_template('Target', self._network_template)
     self._net_outputs = self.online_convnet(self.state_ph)
+    print(self._get_network_type())
     # TODO(bellemare): Ties should be broken. They are unlikely to happen when
     # using a deep network, but may affect performance with a linear
     # approximation scheme.
@@ -249,6 +255,8 @@ class DQNAgent(object):
     self._replay_net_outputs = self.online_convnet(self._replay.states)
     self._replay_next_target_net_outputs = self.target_convnet(
         self._replay.next_states)
+    self._net_features = self._net_outputs.features
+
 
   def _build_replay_buffer(self, use_staging):
     """Creates the replay buffer used by the agent.
@@ -301,6 +309,7 @@ class DQNAgent(object):
         name='replay_chosen_q')
 
     target = tf.stop_gradient(self._build_target_q_op())
+    #target = tf.Print(target, [target], "target: ")
     loss = tf.losses.huber_loss(
         target, replay_chosen_q, reduction=tf.losses.Reduction.NONE)
     if self.summary_writer is not None:
